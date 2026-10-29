@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Krillion: Join the coven</title>
+<link href="https://fonts.googleapis.com/css2?family=Creepster&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+:root{color-scheme:dark;--bg:#14081f;--card:#261140;--ink:#f6ecff;--mute:#b79ad6;--or:#ff7a1a;--gr:#8cff5a;--pu:#9b5cff}
+body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 0,#43206b,var(--bg) 65%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+#app{max-width:520px;margin:0 auto;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:max(16px,env(safe-area-inset-bottom))}
+h1{font-family:Creepster,Georgia,serif;font-weight:400;color:var(--or);font-size:44px;margin:4px 0;text-align:center;letter-spacing:2px;text-shadow:0 0 18px #ff7a1a88}
+.card{background:var(--card);border:1px solid #4a2a78;border-radius:16px;padding:18px;margin:12px 0}
+.sub{text-align:center;color:var(--mute)}.q{font-size:28px;font-weight:700;text-align:center;margin:10px 0}
+.me{text-align:center;animation:fl 3s ease-in-out infinite}.me .e{font-size:64px;display:block}
+.me .n{display:inline-block;background:#0008;border:1px solid var(--pu);border-radius:999px;padding:2px 12px}
+@keyframes fl{50%{transform:translateY(-8px) rotate(2deg)}}
+input{width:100%;box-sizing:border-box;background:#0d0516;color:var(--ink);border:2px solid var(--pu);border-radius:12px;padding:14px;font-size:20px}
+button{width:100%;margin-top:12px;background:var(--or);color:#1b0b00;border:0;border-radius:12px;padding:14px;font-size:19px;font-weight:800;cursor:pointer}
+.msg{text-align:center;font-size:20px;margin:26px 0}.big{font-size:56px;text-align:center;font-weight:800;color:var(--gr)}
+.st{text-align:center;font-size:12px;color:var(--mute);margin-top:18px}
+</style></head><body><div id="app"></div>
+<script>
+const params=new URLSearchParams(location.search);
+const ROOM=params.get("r")||"krillion-witches-coven-7q3x";
+const WITCH=["🧙‍♀️","🧙🏻‍♀️","🧙🏼‍♀️","🧙🏽‍♀️","🧙🏾‍♀️","🧙🏿‍♀️"];
+const app=document.getElementById("app");
+const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}},del:k=>{try{localStorage.removeItem(k)}catch(e){}}};
+let pid=ls.get("kw_pid")||("p"+Math.random().toString(36).slice(2,10));ls.set("kw_pid",pid);
+let name=ls.get("kw_name")||"",witch=ls.get("kw_witch")||"",G=null,conn=null,peer=null,online=false,joined=!!name,typed="";
+function h(t,c,x){const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+function connect(){try{if(peer)peer.destroy()}catch(e){}
+ peer=new Peer();
+ peer.on("open",()=>{conn=peer.connect(ROOM,{reliable:true});
+  conn.on("open",()=>{online=true;if(joined)conn.send({t:"join",pid,name,witch});render()});
+  conn.on("data",m=>{if(m.t==="state"){G=m;render()}else if(m.t==="reset"){ls.del("kw_name");name="";witch="";joined=false;G=null;render()}});
+  conn.on("close",()=>{online=false;render();setTimeout(connect,2000)});
+  conn.on("error",()=>{online=false;setTimeout(connect,2500)})});
+ peer.on("error",()=>{online=false;render();setTimeout(connect,3000)})}
+function send(m){if(conn&&conn.open)conn.send(m)}
+function render(){
+ app.replaceChildren(h("h1","","Krillion 🎃"));
+ if(!joined){
+  const card=h("div","card");card.append(h("p","sub","Pick your witch name:"));
+  const inp=document.createElement("input");inp.maxLength=16;inp.placeholder="Your name";inp.value=typed;inp.oninput=()=>typed=inp.value;
+  const b=h("button","","Join the coven 🧙‍♀️");
+  b.onclick=()=>{const n=inp.value.trim();if(!n)return;name=n;witch=WITCH[Math.floor(Math.random()*WITCH.length)];ls.set("kw_name",name);ls.set("kw_witch",witch);joined=true;send({t:"join",pid,name,witch});render()};
+  card.append(inp,b);app.append(card);
+ }else{
+  const me=h("div","me");me.append(h("span","e",witch),h("span","n",name));app.append(me);
+  if(!G||G.phase==="lobby")app.append(h("p","msg",online?"You’re in! Waiting for the host to start the spell… 🕯️":"Finding the coven… 🔮"));
+  else if(G.phase==="ask"){
+   const card=h("div","card");card.append(h("p","sub","Question "+(G.q+1)+" of "+G.n),h("div","q",G.qt));
+   const inp=document.createElement("input");inp.placeholder="Your answer";inp.value=G.mine||"";
+   const b=h("button","",G.mine?"Update answer":"Lock it in 🔒");
+   b.onclick=()=>{const v=inp.value.trim();if(!v)return;send({t:"ans",pid,q:G.q,a:v});b.textContent="Sending…"};
+   card.append(inp,b);if(G.mine)card.append(h("p","sub","Locked in: “"+G.mine+"” ✨"));app.append(card);
+  }else{
+   const card=h("div","card");card.append(h("p","sub","Question "+(G.q+1)+": "+(G.ans?"“"+G.ans+"”":"no answer")));
+   if(G.pts!=null)card.append(h("div","big","+"+G.pts));
+   card.append(h("p","sub","Total: "+(G.total||0)+" points · Rank "+G.rank+" of "+G.of));app.append(card);
+   app.append(h("p","msg",G.phase==="final"?"🏆 Game over! Check the big screen!":"👀 Eyes on the big screen!"));
+  }
+ }
+ app.append(h("div","st",online?"Connected":"Connecting…"));
+}
+render();connect();
+</script></body></html>
