@@ -61,7 +61,7 @@ const joinUrl=()=>new URL("play.html",location.href.split("#")[0].split("?")[0])
 function ranking(){const up=revealed();const r=list().map(p=>({p,t:total(p,up)})).sort((a,b)=>b.t-a.t);return r}
 function stateFor(id){const p=S.players[id];const m={t:"state",phase:S.phase,q:S.q,qt:Q[S.q],n:Q.length,mine:p?ans(p,S.q)||"":""};
  if(S.phase==="reveal"||S.phase==="final"){const r=ranking(),i=r.findIndex(x=>x.p.id===id);m.total=i>=0?r[i].t:0;m.rank=i+1;m.of=r.length;m.pts=p?ptsOf(S.q,ans(p,S.q)):null;m.ans=p?ans(p,S.q)||"":""}return m}
-const BROKERS=["wss://broker.hivemq.com:8884/mqtt","wss://broker.emqx.io:8084/mqtt"],BASE="kw/"+ROOM;
+const BROKERS=["wss://broker.hivemq.com:8884/mqtt","wss://broker.emqx.io:8084/mqtt","wss://mqtt.eclipseprojects.io:443/mqtt"],BASE="kw/"+ROOM;
 const online=id=>Date.now()-(seen[id]||0)<15000;
 function pub(sub,m){const s=JSON.stringify(m);clients.forEach(c=>{if(c.connected)try{c.publish(BASE+sub,s)}catch(e){}})}
 function sendTo(id){pub("/dn/"+id,stateFor(id))}
@@ -72,12 +72,17 @@ function onMsg(m){if(!m||!m.pid)return;const id=m.pid;
   p.name=String(m.name||"Witch").slice(0,16);p.witch=m.witch||p.witch||"🧙‍♀️";const was=online(id);seen[id]=Date.now();
   if(isNew||m.known!==S.phase+":"+S.q)sendTo(id);if(isNew||!was){save();render()}}
  else if(m.t==="ans"&&S.players[id]&&S.phase==="ask"&&m.q===S.q){S.players[id].answers[m.q]=String(m.a||"").slice(0,60);save();sendTo(id);render()}}
+const bs=BROKERS.map(()=>false);
+function setStatus(){const n=bs.filter(Boolean).length,d=BROKERS.map((u,i)=>u.split("//")[1].split(":")[0].replace("broker.","").replace("mqtt.","")+(bs[i]?" ok":" no")).join(", ");
+ status=(n?"Ready: players can join":"Connecting to the game server… check this computer’s internet or firewall")+" ["+d+"]";render()}
 function start(){
- BROKERS.forEach(u=>{const c=mqtt.connect(u,{reconnectPeriod:3000,connectTimeout:8000,clientId:"kwh-"+Math.random().toString(16).slice(2)});
-  c.on("connect",()=>{c.subscribe(BASE+"/up");status="Ready: players can join";render()});
+ BROKERS.forEach((u,i)=>{const c=mqtt.connect(u,{reconnectPeriod:3000,connectTimeout:8000,clientId:"kwh-"+Math.random().toString(16).slice(2)});
+  c.on("connect",()=>{c.subscribe(BASE+"/up");bs[i]=true;setStatus()});
   c.on("message",(t,pl)=>{try{onMsg(JSON.parse(pl.toString()))}catch(e){}});
-  c.on("close",()=>{if(!clients.some(x=>x.connected)){status="Connecting to the game server… check this computer’s internet";render()}});
+  c.on("close",()=>{if(bs[i]){bs[i]=false;setStatus()}});
+  c.on("error",()=>{});
   clients.push(c)});
+ setTimeout(setStatus,3000);
  setInterval(()=>pub("/all",{t:"beat"}),4000)}
 function witchGrid(done){const g=h("div","grid"),L=list();
  L.forEach(p=>{const w=h("div","w"+(done&&ans(p,S.q)?" done":"")+(online(p.id)?"":" off"));w.append(h("span","e",p.witch||"🧙‍♀️"),h("span","n",p.name||"Witch"));g.append(w)});
