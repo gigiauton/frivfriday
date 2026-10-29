@@ -67,7 +67,7 @@ function setState(patch){Object.assign(S,patch);save();broadcast();render()}
 function onMsg(c,m){if(!m||!m.t)return;
  if(m.t==="join"&&m.pid){const p=S.players[m.pid]||(S.players[m.pid]={answers:{},ts:Date.now()});p.name=String(m.name||"Witch").slice(0,16);p.witch=m.witch||p.witch||"🧙‍♀️";conns[m.pid]=c;c.pid=m.pid;save();sendTo(m.pid);render()}
  else if(m.t==="ans"&&c.pid&&S.players[c.pid]&&S.phase==="ask"&&m.q===S.q){S.players[c.pid].answers[m.q]=String(m.a||"").slice(0,60);save();sendTo(c.pid);render()}}
-function start(){peer=new Peer(ROOM);
+function start(){peer=new Peer(ROOM,{config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:openrelay.metered.ca:80"},{urls:"turn:openrelay.metered.ca:80",username:"openrelayproject",credential:"openrelayproject"},{urls:"turn:openrelay.metered.ca:443",username:"openrelayproject",credential:"openrelayproject"},{urls:"turn:openrelay.metered.ca:443?transport=tcp",username:"openrelayproject",credential:"openrelayproject"}]}});
  peer.on("open",()=>{status="Ready: players can join";render()});
  peer.on("connection",c=>{c.on("data",m=>onMsg(c,m));c.on("close",()=>{if(c.pid&&conns[c.pid]===c){delete conns[c.pid];render()}})});
  peer.on("error",e=>{if(e.type==="unavailable-id"){status="This room is still held by a previous host page. Close other host tabs, wait 30 seconds, then refresh.";render()}else{status="Connection problem ("+e.type+"). Retrying…";setTimeout(()=>{try{peer.destroy()}catch(x){}start()},4000);render()}});
