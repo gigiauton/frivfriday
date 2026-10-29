@@ -3,7 +3,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Krillion: Join the coven</title>
 <link href="https://fonts.googleapis.com/css2?family=Creepster&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
 :root{color-scheme:dark;--bg:#14081f;--card:#261140;--ink:#f6ecff;--mute:#b79ad6;--or:#ff7a1a;--gr:#8cff5a;--pu:#9b5cff}
 body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 0,#43206b,var(--bg) 65%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,sans-serif}
@@ -21,38 +21,44 @@ button{width:100%;margin-top:12px;background:var(--or);color:#1b0b00;border:0;bo
 </style></head><body><div id="app"></div>
 <script>
 const params=new URLSearchParams(location.search);
-const ROOM=params.get("r")||"krillion-witches-coven-7q3x";
+const ROOM=params.get("r")||"krillion-witches-coven-7q3x",BASE="kw/"+ROOM;
+const BROKERS=["wss://broker.hivemq.com:8884/mqtt","wss://broker.emqx.io:8084/mqtt"];
 const WITCH=["🧙‍♀️","🧙🏻‍♀️","🧙🏼‍♀️","🧙🏽‍♀️","🧙🏾‍♀️","🧙🏿‍♀️"];
 const app=document.getElementById("app");
 const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}},del:k=>{try{localStorage.removeItem(k)}catch(e){}}};
 let pid=ls.get("kw_pid")||("p"+Math.random().toString(36).slice(2,10));ls.set("kw_pid",pid);
-let name=ls.get("kw_name")||"",witch=ls.get("kw_witch")||"",G=null,conn=null,peer=null,online=false,joined=!!name,typed="";
+let name=ls.get("kw_name")||"",witch=ls.get("kw_witch")||"",G=null,clients=[],hostBeat=0,joined=!!name,typed="",draft="",draftQ=-1,pending=null;
+const online=()=>Date.now()-hostBeat<12000;
 function h(t,c,x){const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
-function connect(){try{if(peer)peer.destroy()}catch(e){}
- peer=new Peer(undefined,{config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:openrelay.metered.ca:80"},{urls:"turn:openrelay.metered.ca:80",username:"openrelayproject",credential:"openrelayproject"},{urls:"turn:openrelay.metered.ca:443",username:"openrelayproject",credential:"openrelayproject"},{urls:"turn:openrelay.metered.ca:443?transport=tcp",username:"openrelayproject",credential:"openrelayproject"}]}});
- peer.on("open",()=>{conn=peer.connect(ROOM,{reliable:true});
-  conn.on("open",()=>{online=true;if(joined)conn.send({t:"join",pid,name,witch});render()});
-  conn.on("data",m=>{if(m.t==="state"){G=m;render()}else if(m.t==="reset"){ls.del("kw_name");name="";witch="";joined=false;G=null;render()}});
-  conn.on("close",()=>{online=false;render();setTimeout(connect,2000)});
-  conn.on("error",()=>{online=false;setTimeout(connect,2500)})});
- peer.on("error",()=>{online=false;render();setTimeout(connect,3000)})}
-function send(m){if(conn&&conn.open)conn.send(m)}
+function pub(m){const s=JSON.stringify(m);clients.forEach(c=>{if(c.connected)try{c.publish(BASE+"/up",s)}catch(e){}})}
+const hb=()=>pub({t:"hb",pid,name,witch,known:G?G.phase+":"+G.q:""});
+function paint(){const e=document.getElementById("st");if(e)e.textContent=online()?"Connected":"Connecting… (if this stays stuck, check your internet connection)"}
+function connect(){
+ BROKERS.forEach(u=>{const c=mqtt.connect(u,{reconnectPeriod:3000,connectTimeout:8000,clientId:"kwp-"+Math.random().toString(16).slice(2)});
+  c.on("connect",()=>{c.subscribe([BASE+"/dn/"+pid,BASE+"/all"]);if(joined)hb()});
+  c.on("message",(t,pl)=>{let m;try{m=JSON.parse(pl.toString())}catch(e){return}
+   if(m.t==="beat"){const was=online();hostBeat=Date.now();if(!was){paint();if(!G)render()}}
+   else if(m.t==="reset"){ls.del("kw_name");name="";witch="";joined=false;G=null;typed="";draft="";pending=null;render()}
+   else if(m.t==="state"){hostBeat=Date.now();const old=G;G=m;if(pending&&G.q===pending.q&&G.mine===pending.a)pending=null;
+    if(!old||old.phase!==G.phase||old.q!==G.q||old.mine!==G.mine||old.pts!==G.pts||old.total!==G.total)render();paint()}});
+  clients.push(c)});
+ setInterval(()=>{if(!joined)return;hb();if(pending&&G&&G.mine!==pending.a)pub({t:"ans",pid,q:pending.q,a:pending.a});paint()},3000)}
 function render(){
  app.replaceChildren(h("h1","","Krillion 🎃"));
  if(!joined){
   const card=h("div","card");card.append(h("p","sub","Pick your witch name:"));
   const inp=document.createElement("input");inp.maxLength=16;inp.placeholder="Your name";inp.value=typed;inp.oninput=()=>typed=inp.value;
   const b=h("button","","Join the coven 🧙‍♀️");
-  b.onclick=()=>{const n=inp.value.trim();if(!n)return;name=n;witch=WITCH[Math.floor(Math.random()*WITCH.length)];ls.set("kw_name",name);ls.set("kw_witch",witch);joined=true;send({t:"join",pid,name,witch});render()};
+  b.onclick=()=>{const n=inp.value.trim();if(!n)return;name=n;witch=WITCH[Math.floor(Math.random()*WITCH.length)];ls.set("kw_name",name);ls.set("kw_witch",witch);joined=true;hb();render()};
   card.append(inp,b);app.append(card);
  }else{
   const me=h("div","me");me.append(h("span","e",witch),h("span","n",name));app.append(me);
-  if(!G||G.phase==="lobby")app.append(h("p","msg",online?"You’re in! Waiting for the host to start the spell… 🕯️":"Finding the coven… 🔮"));
+  if(!G||G.phase==="lobby")app.append(h("p","msg",online()?"You’re in! Waiting for the host to start the spell… 🕯️":"Finding the coven… 🔮"));
   else if(G.phase==="ask"){
    const card=h("div","card");card.append(h("p","sub","Question "+(G.q+1)+" of "+G.n),h("div","q",G.qt));
-   const inp=document.createElement("input");inp.placeholder="Your answer";inp.value=G.mine||"";
+   const inp=document.createElement("input");inp.placeholder="Your answer";inp.value=draftQ===G.q?draft:(G.mine||"");inp.oninput=()=>{draft=inp.value;draftQ=G.q};
    const b=h("button","",G.mine?"Update answer":"Lock it in 🔒");
-   b.onclick=()=>{const v=inp.value.trim();if(!v)return;send({t:"ans",pid,q:G.q,a:v});b.textContent="Sending…"};
+   b.onclick=()=>{const v=inp.value.trim();if(!v)return;pending={q:G.q,a:v};pub({t:"ans",pid,q:G.q,a:v});b.textContent="Sending…"};
    card.append(inp,b);if(G.mine)card.append(h("p","sub","Locked in: “"+G.mine+"” ✨"));app.append(card);
   }else{
    const card=h("div","card");card.append(h("p","sub","Question "+(G.q+1)+": "+(G.ans?"“"+G.ans+"”":"no answer")));
@@ -61,7 +67,7 @@ function render(){
    app.append(h("p","msg",G.phase==="final"?"🏆 Game over! Check the big screen!":"👀 Eyes on the big screen!"));
   }
  }
- app.append(h("div","st",online?"Connected":"Connecting… (if this stays stuck, try the same wifi as the host screen)"));
+ const st=h("div","st","");st.id="st";app.append(st);paint();
 }
 render();connect();
 </script></body></html>

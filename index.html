@@ -4,7 +4,7 @@
 <title>Krillion: Witches’ Edition (Host)</title>
 <link href="https://fonts.googleapis.com/css2?family=Creepster&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
 :root{color-scheme:dark;--bg:#14081f;--card:#261140;--ink:#f6ecff;--mute:#b79ad6;--or:#ff7a1a;--gr:#8cff5a;--pu:#9b5cff}
 body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 0,#43206b,var(--bg) 65%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,sans-serif}
@@ -49,7 +49,7 @@ function ptsOf(qi,raw){const n=norm(raw);if(!n)return null;const k=qi+"|"+n;if(k
  if(bd!==0&&lim){for(const[e,p]of KEY[qi]){const d=osa(n,e,lim);if(d<=lim&&e.length>=5){if(d<bd||(d===bd&&p<best)){bd=d;best=p}}}}
  return cache[k]=best==null?DEFAULT_PTS:best}
 const app=document.getElementById("app");
-let S={phase:"lobby",q:0,players:{}},conns={},peer=null,status="Connecting…",confirmReset=false;
+let S={phase:"lobby",q:0,players:{}},seen={},clients=[],status="Connecting…",confirmReset=false;
 try{const sv=JSON.parse(localStorage.getItem("krillionHost")||"null");if(sv&&sv.players)S=sv}catch(e){}
 const save=()=>{try{localStorage.setItem("krillionHost",JSON.stringify(S))}catch(e){}};
 const ans=(p,i)=>(p.answers||{})[i];
@@ -61,19 +61,26 @@ const joinUrl=()=>new URL("play.html",location.href.split("#")[0].split("?")[0])
 function ranking(){const up=revealed();const r=list().map(p=>({p,t:total(p,up)})).sort((a,b)=>b.t-a.t);return r}
 function stateFor(id){const p=S.players[id];const m={t:"state",phase:S.phase,q:S.q,qt:Q[S.q],n:Q.length,mine:p?ans(p,S.q)||"":""};
  if(S.phase==="reveal"||S.phase==="final"){const r=ranking(),i=r.findIndex(x=>x.p.id===id);m.total=i>=0?r[i].t:0;m.rank=i+1;m.of=r.length;m.pts=p?ptsOf(S.q,ans(p,S.q)):null;m.ans=p?ans(p,S.q)||"":""}return m}
-function sendTo(id){const c=conns[id];if(c&&c.open)try{c.send(stateFor(id))}catch(e){}}
-function broadcast(){Object.keys(conns).forEach(sendTo)}
+const BROKERS=["wss://broker.hivemq.com:8884/mqtt","wss://broker.emqx.io:8084/mqtt"],BASE="kw/"+ROOM;
+const online=id=>Date.now()-(seen[id]||0)<15000;
+function pub(sub,m){const s=JSON.stringify(m);clients.forEach(c=>{if(c.connected)try{c.publish(BASE+sub,s)}catch(e){}})}
+function sendTo(id){pub("/dn/"+id,stateFor(id))}
+function broadcast(){Object.keys(S.players).forEach(sendTo)}
 function setState(patch){Object.assign(S,patch);save();broadcast();render()}
-function onMsg(c,m){if(!m||!m.t)return;
- if(m.t==="join"&&m.pid){const p=S.players[m.pid]||(S.players[m.pid]={answers:{},ts:Date.now()});p.name=String(m.name||"Witch").slice(0,16);p.witch=m.witch||p.witch||"🧙‍♀️";conns[m.pid]=c;c.pid=m.pid;save();sendTo(m.pid);render()}
- else if(m.t==="ans"&&c.pid&&S.players[c.pid]&&S.phase==="ask"&&m.q===S.q){S.players[c.pid].answers[m.q]=String(m.a||"").slice(0,60);save();sendTo(c.pid);render()}}
-function start(){peer=new Peer(ROOM,{config:{iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:openrelay.metered.ca:80"},{urls:"turn:openrelay.metered.ca:80",username:"openrelayproject",credential:"openrelayproject"},{urls:"turn:openrelay.metered.ca:443",username:"openrelayproject",credential:"openrelayproject"},{urls:"turn:openrelay.metered.ca:443?transport=tcp",username:"openrelayproject",credential:"openrelayproject"}]}});
- peer.on("open",()=>{status="Ready: players can join";render()});
- peer.on("connection",c=>{c.on("data",m=>onMsg(c,m));c.on("close",()=>{if(c.pid&&conns[c.pid]===c){delete conns[c.pid];render()}})});
- peer.on("error",e=>{if(e.type==="unavailable-id"){status="This room is still held by a previous host page. Close other host tabs, wait 30 seconds, then refresh.";render()}else{status="Connection problem ("+e.type+"). Retrying…";setTimeout(()=>{try{peer.destroy()}catch(x){}start()},4000);render()}});
- peer.on("disconnected",()=>{try{peer.reconnect()}catch(e){}})}
+function onMsg(m){if(!m||!m.pid)return;const id=m.pid;
+ if(m.t==="hb"){let p=S.players[id];const isNew=!p;if(!p)p=S.players[id]={answers:{},ts:Date.now()};
+  p.name=String(m.name||"Witch").slice(0,16);p.witch=m.witch||p.witch||"🧙‍♀️";const was=online(id);seen[id]=Date.now();
+  if(isNew||m.known!==S.phase+":"+S.q)sendTo(id);if(isNew||!was){save();render()}}
+ else if(m.t==="ans"&&S.players[id]&&S.phase==="ask"&&m.q===S.q){S.players[id].answers[m.q]=String(m.a||"").slice(0,60);save();sendTo(id);render()}}
+function start(){
+ BROKERS.forEach(u=>{const c=mqtt.connect(u,{reconnectPeriod:3000,connectTimeout:8000,clientId:"kwh-"+Math.random().toString(16).slice(2)});
+  c.on("connect",()=>{c.subscribe(BASE+"/up");status="Ready: players can join";render()});
+  c.on("message",(t,pl)=>{try{onMsg(JSON.parse(pl.toString()))}catch(e){}});
+  c.on("close",()=>{if(!clients.some(x=>x.connected)){status="Connecting to the game server… check this computer’s internet";render()}});
+  clients.push(c)});
+ setInterval(()=>pub("/all",{t:"beat"}),4000)}
 function witchGrid(done){const g=h("div","grid"),L=list();
- L.forEach(p=>{const w=h("div","w"+(done&&ans(p,S.q)?" done":"")+(conns[p.id]?"":" off"));w.append(h("span","e",p.witch||"🧙‍♀️"),h("span","n",p.name||"Witch"));g.append(w)});
+ L.forEach(p=>{const w=h("div","w"+(done&&ans(p,S.q)?" done":"")+(online(p.id)?"":" off"));w.append(h("span","e",p.witch||"🧙‍♀️"),h("span","n",p.name||"Witch"));g.append(w)});
  if(!L.length)g.append(h("p","sub","No witches yet… scan the QR code to join the coven 🕯️"));return g}
 function board(final){const f=document.createDocumentFragment();
  ranking().forEach((r,i)=>{const row=h("div","row");row.append(h("div","rank",final?(["🥇","🥈","🥉"][i]||i+1):i+1),h("div","e",r.p.witch||"🧙‍♀️"));
@@ -100,7 +107,7 @@ function render(){
   const last=S.q>=Q.length-1,b=h("button","",last?"Final scores 🏆":"Next question ➡️");b.onclick=()=>setState(last?{phase:"final"}:{phase:"ask",q:S.q+1});c.append(b);
  }else app.append(h("p","big","🏆"),h("p","sub","The coven has spoken!"),board(true));
  const r=h("button","ghost",confirmReset?"Tap again to wipe everyone and restart":"New game");
- r.onclick=()=>{if(!confirmReset){confirmReset=true;render();return}confirmReset=false;S={phase:"lobby",q:0,players:{}};save();Object.values(conns).forEach(x=>{try{x.send({t:"reset"})}catch(e){}});conns={};render()};
+ r.onclick=()=>{if(!confirmReset){confirmReset=true;render();return}confirmReset=false;S={phase:"lobby",q:0,players:{}};save();pub("/all",{t:"reset"});seen={};render()};
  c.append(r);app.append(c,h("p","sub",status));
 }
 render();start();
